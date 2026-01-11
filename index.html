@@ -3,11 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Climato - Weather & AQI</title>
+<title>Climato - Weather & AQI PWA</title>
 <link rel="manifest" href="manifest.json">
 <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
 <style>
-/* ------------------------ STYLES ------------------------ */
 html {font-size:16px;}
 body{
   margin:0;
@@ -18,7 +17,7 @@ body{
   transition: background 0.3s,color 0.3s;
 }
 .app{
-  position:relative;
+  position:relative; /* for toggle inside */
   max-width:450px;
   margin:auto;
   padding:20px;
@@ -38,18 +37,20 @@ body{
   width:50px;
   height:50px;
   border-radius:50%;
-  border:2px solid #1E3A8A;
+  border:2px solid #00ff9d;
   background: rgba(255,255,255,0.05);
   display:flex;
   justify-content:center;
   align-items:center;
   font-size:24px;
-  color:#1E3A8A;
+  color:#00ff9d;
   cursor:pointer;
   z-index:10;
   transition:0.3s;
 }
-#darkModeToggle:hover{background: rgba(255,255,255,0.15);}
+#darkModeToggle:hover{
+  background: rgba(255,255,255,0.15);
+}
 .card{
   background: rgba(255,255,255,0.05);
   backdrop-filter: blur(15px);
@@ -63,7 +64,7 @@ body{
   line-height:1.6em;
 }
 input{width:100%; padding:14px; border:none; border-radius:10px; margin-top:10px; font-size:1em; background: rgba(255,255,255,0.1); color:white;}
-button{padding:14px 20px; margin:10px 5px; border:none; border-radius:50px; cursor:pointer; background:#1E3A8A; font-weight:bold; color:#fff; font-size:1em; transition:0.3s;}
+button{padding:14px 20px; margin:10px 5px; border:none; border-radius:50px; cursor:pointer; background:#00ff9d; font-weight:bold; color:#000; font-size:1em; transition:0.3s;}
 button:hover{opacity:0.8;}
 #map{height:300px;width:100%;border-radius:15px;margin-top:20px;border:1px solid rgba(255,255,255,0.2);}
 canvas{margin-top:15px;background: rgba(0,0,0,0.15);border-radius:10px;}
@@ -72,8 +73,6 @@ footer{margin-top:20px;font-size:14px;color: rgba(255,255,255,0.6);text-align:ce
 .card h2.city-name { font-size:2em; font-weight:bold; text-align:center; }
 .card p.temp, .card p.aqi-value { font-size:2em; font-weight:bold; text-align:center; }
 .card p.risk-level { font-size:1.5em; font-weight:bold; }
-#forecast-list li{margin-bottom:6px;}
-#addToHomeBtn{margin-top:10px;}
 @media(max-width:480px){
   html{font-size:14px;}
   .card h2.city-name { font-size:1.8em; }
@@ -109,7 +108,7 @@ footer{margin-top:20px;font-size:14px;color: rgba(255,255,255,0.6);text-align:ce
     <h3>7-Day Forecast for Temperature</h3>
     <ul id="forecast-list"></ul>
     <h3>24-Hour Temperature (Max/Min)</h3>
-    <canvas id="tempChart" width="400" height="150"></canvas>
+    <canvas id="chart" width="400" height="150"></canvas>
   </div>
 
   <div id="aqi" class="card">
@@ -128,18 +127,13 @@ footer{margin-top:20px;font-size:14px;color: rgba(255,255,255,0.6);text-align:ce
   </div>
 
   <div id="map"></div>
-
-  <button id="addToHomeBtn" style="display:none;">Add Climato to Home Screen</button>
-
   <footer>© Manik Roy 2025. All Rights Reserved.</footer>
 </div>
 
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
-// ------------------ VARIABLES ------------------
-let tempData=[], aqiData=[], map=null, darkMode=false, deferredPrompt;
+let lastData=[], map=null, markers=[], darkMode=false;
 
-// ------------------ DARK MODE ------------------
 function toggleDarkMode(){
   darkMode=!darkMode;
   document.body.style.background=darkMode?'#000':'#fff';
@@ -147,127 +141,104 @@ function toggleDarkMode(){
   document.getElementById('darkModeToggle').innerHTML=darkMode?'☀':'🌙';
 }
 
-// ------------------ MAP ------------------
-function initMap(){if(!map) map=L.map('map').setView([20,78],4); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);}
-function updateMapMarker(lat,lon,city){initMap(); L.marker([lat,lon]).addTo(map).bindPopup(city).openPopup(); map.setView([lat,lon],8);}
-
-// ------------------ CITY SEARCH ------------------
-function searchCity(){let city=document.getElementById("city").value; fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${city}`).then(r=>r.json()).then(d=>{if(d.results && d.results.length>0){let c=d.results[0]; loadData(c.latitude,c.longitude,c.name,c.country);}});}
+function initMap(){if(map)return; map=L.map('map').setView([20,78],4); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);}
+function updateMapMarker(lat,lon,city){initMap(); markers.forEach(m=>map.removeLayer(m)); markers=[]; let marker=L.circleMarker([lat,lon],{color:'#00ff9d',radius:12}).addTo(map).bindPopup(city); markers.push(marker); map.setView([lat,lon],8);}
+function searchCity(){let city=document.getElementById("city").value; fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${city}`).then(r=>r.json()).then(d=>{let c=d.results[0]; loadData(c.latitude,c.longitude,c.name,c.country);});}
 function getLocation(){navigator.geolocation.getCurrentPosition(p=>{loadData(p.coords.latitude,p.coords.longitude,"Your Location","");});}
+function loadData(lat,lon,city,country){getWeather(lat,lon,city,country); getAQI(lat,lon,city); updateMapMarker(lat,lon,city); setInterval(()=>getAQI(lat,lon,city),600000);}
 
-// ------------------ LOAD DATA ------------------
-function loadData(lat,lon,city){
-  loadWeather(lat,lon,city);
-  loadAQI(lat,lon,city);
-  updateMapMarker(lat,lon,city);
-  setInterval(()=>loadAQI(lat,lon,city),10*60*1000); // Update AQI every 10 min
-}
+/* WEATHER 7-DAY + 24H TEMPERATURE + humidity, pressure, weather */
+function getWeather(lat,lon,city,country){
+fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,relativehumidity_2m,pressure_msl,weathercode&daily=temperature_2m_max,temperature_2m_min,sunrise,sunset&current_weather=true&timezone=auto`)
+.then(r=>r.json()).then(d=>{
+  const currentHour = 0;
+  const humidity = d.hourly.relativehumidity_2m[currentHour];
+  const pressure = d.hourly.pressure_msl[currentHour];
+  const weatherDesc = weatherText(d.hourly.weathercode[currentHour]);
 
-// ------------------ WEATHER ------------------
-async function loadWeather(lat,lon,city){
-  try{
-    let res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,relativehumidity_2m,pressure_msl,weathercode&daily=temperature_2m_max,temperature_2m_min,sunrise,sunset&current_weather=true&timezone=auto`);
-    let d = await res.json();
-    tempData = d.hourly.temperature_2m.slice(0,24) || [];
-    updateWeatherUI(d,city);
-    drawTempChart();
-  }catch(e){console.error("Weather error",e);}
-}
-
-function updateWeatherUI(d,city){
-  let weatherCode = d.hourly.weathercode?.[0] || 0;
-  let desc = weatherText(weatherCode);
-  let wcard = document.getElementById("weather");
-  wcard.querySelector(".city-name").textContent = city;
-  wcard.querySelector(".temp").textContent = d.current_weather?.temperature ?? "--" + " °C";
-  wcard.querySelectorAll("p")[1].textContent = "Humidity: " + (d.hourly.relativehumidity_2m?.[0] ?? "--") + "%";
-  wcard.querySelectorAll("p")[2].textContent = "Wind: " + (d.current_weather?.windspeed ?? "--") + " km/h";
-  wcard.querySelectorAll("p")[3].textContent = "Pressure: " + (d.hourly.pressure_msl?.[0] ?? "--") + " hPa";
-  wcard.querySelectorAll("p")[4].textContent = "Weather: " + desc;
-
-  let list = document.getElementById("forecast-list");
-  list.innerHTML = "";
-  if(d.daily?.temperature_2m_max){
-    for(let i=0;i<d.daily.temperature_2m_max.length;i++){
-      let li = document.createElement("li");
-      li.textContent = `Day ${i+1}: Max ${d.daily.temperature_2m_max[i] ?? "--"}°C / Min ${d.daily.temperature_2m_min[i] ?? "--"}°C`;
-      list.appendChild(li);
-    }
-  }
-}
-
-// ------------------ 24-HOUR TEMP CHART ------------------
-function drawTempChart(){
-  let c = document.getElementById("tempChart");
-  if(!c || tempData.length===0) return;
-  let ctx = c.getContext("2d");
-  ctx.clearRect(0,0,c.width,c.height);
-  let max = Math.max(...tempData);
-  tempData.forEach((v,i)=>{
-    let x = i*15;
-    let y = c.height - (v/max)*140;
-    ctx.fillStyle = v>=30?'#ff4500':v>=20?'#ffd700':'#00bfff';
-    ctx.fillRect(x,y,12,c.height-y);
-  });
-}
-
-// ------------------ AQI ------------------
-async function loadAQI(lat,lon,city){
-  try{
-    let res = await fetch(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}`);
-    let d = await res.json();
-    aqiData = d.hourly?.pm2_5?.slice(0,24) || [];
-    updateAQIUI(d,city);
-  }catch(e){console.error("AQI error",e);}
-}
-
-function updateAQIUI(d,city){
-  let p = aqiData[0] ?? 0;
-  let aqi = epaAQI(p);
-  let trend = (aqiData[5] ?? 0)>p?"Rising":"Falling";
-  let card = document.getElementById("aqi");
-  card.querySelector(".city-name").textContent = city;
-  card.querySelector(".aqi-bar").style.width = Math.min(aqi.value,500)/5 + "%";
-  card.querySelector(".aqi-bar").style.background = aqi.color;
-  card.querySelector(".aqi-value").textContent = aqi.value ?? "--";
-  card.querySelector(".risk-level").textContent = aqi.level ?? "--";
-  card.querySelectorAll("p")[3].textContent = "PM2.5: "+(d.hourly?.pm2_5?.[0]??"--");
-  card.querySelectorAll("p")[4].textContent = "PM10: "+(d.hourly?.pm10?.[0]??"--");
-  card.querySelectorAll("p")[5].textContent = "CO: "+(d.hourly?.carbon_monoxide?.[0]??"--");
-  card.querySelectorAll("p")[6].textContent = "NO2: "+(d.hourly?.nitrogen_dioxide?.[0]??"--");
-  card.querySelectorAll("p")[7].textContent = "SO2: "+(d.hourly?.sulphur_dioxide?.[0]??"--");
-  card.querySelectorAll("p")[8].textContent = "O3: "+(d.hourly?.ozone?.[0]??"--");
-  card.querySelectorAll("p")[9].textContent = "Trend: "+trend;
-  card.querySelectorAll("p")[10].textContent = "Mask & AI Advice: "+smartTip(aqi.value ?? 0);
-}
-
-// ------------------ UTILITIES ------------------
-function epaAQI(cp){
-  const t=[{cL:0,cH:12,iL:0,iH:50,l:"Good",c:"#00e400"},{cL:12.1,cH:35.4,iL:51,iH:100,l:"Moderate",c:"#ffff00"},{cL:35.5,cH:55.4,iL:101,iH:150,l:"Sensitive",c:"#ff7e00"},{cL:55.5,cH:150.4,iL:151,iH:200,l:"Unhealthy",c:"#ff0000"},{cL:150.5,cH:250.4,iL:201,iH:300,l:"Very Unhealthy",c:"#8f3f97"},{cL:250.5,cH:500.4,iL:301,iH:500,l:"Hazardous",c:"#7e0023"}];
-  for(let x of t){if(cp>=x.cL && cp<=x.cH){let a=((x.iH-x.iL)/(x.cH-x.cL))*(cp-x.cL)+x.iL; return {value:Math.round(a),level:x.l,color:x.c};}}
-  return {value:0,level:"Unknown",color:"#fff"};
-}
-function smartTip(v){if(v<50)return"Perfect outdoor day"; if(v<100)return"Sensitive people limit exposure"; if(v<150)return"Avoid exercise outside"; if(v<200)return"Stay indoors"; return"Emergency condition!";}
-function weatherText(code){if(code===0) return "Clear"; if(code===1) return "Mainly Clear"; if(code===2) return "Partly Cloudy"; if(code===3) return "Overcast"; if(code>=45 && code<=48) return "Fog"; if(code>=51 && code<=57) return "Drizzle"; if(code>=61 && code<=67) return "Rain"; if(code>=71 && code<=77) return "Snow"; if(code>=80 && code<=82) return "Rain Showers"; if(code>=95) return "Thunderstorm"; return "Unknown";}
-
-// ------------------ PWA SERVICE WORKER ------------------
-if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js').then(()=>console.log("SW registered")).catch(err=>console.log(err));}
-
-// ------------------ ADD TO HOME SCREEN ------------------
-window.addEventListener('beforeinstallprompt', (e)=>{
-  e.preventDefault();
-  deferredPrompt = e;
-  const btn = document.getElementById("addToHomeBtn");
-  btn.style.display="block";
-  btn.onclick = ()=>{
-    deferredPrompt.prompt();
-    deferredPrompt.userChoice.then(choice=>{
-      console.log("A2HS:", choice.outcome);
-      deferredPrompt=null;
-      btn.style.display="none";
-    });
-  };
+  document.getElementById("weather").innerHTML=`
+    <h2 class="city-name">${city} ${country}</h2>
+    <p class="temp">${d.current_weather.temperature} °C</p>
+    <p>Humidity: ${humidity}%</p>
+    <p>Wind: ${d.current_weather.windspeed} km/h</p>
+    <p>Pressure: ${pressure} hPa</p>
+    <p>Weather: ${weatherDesc}</p>
+    <p>Sunrise: ${d.daily.sunrise[0]}</p>
+    <p>Sunset: ${d.daily.sunset[0]}</p>
+    <p>Latitude: ${lat.toFixed(3)}</p>
+    <p>Longitude: ${lon.toFixed(3)}</p>
+    <p>Timezone: ${d.timezone}</p>
+    <h3>7-Day Forecast for Temperature</h3>
+    <ul id="forecast-list">${d.daily.temperature_2m_max.map((t,i)=>`<li>Day ${i+1}: Max ${t} °C / Min ${d.daily.temperature_2m_min[i]} °C</li>`).join('')}</ul>
+    <h3>24-Hour Temperature (Max/Min)</h3>
+    <canvas id="chart" width="400" height="150"></canvas>
+  `;
+  lastData=d.hourly.temperature_2m.slice(0,24);
+  drawChart();
 });
+}
+
+/* AQI 10 FEATURES + HEATMAP */
+function getAQI(lat,lon,city){
+fetch(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&hourly=pm2_5,pm10,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone`)
+.then(r=>r.json()).then(d=>{
+lastData=d.hourly.pm2_5.slice(0,24); let p=lastData[0]; let aqi=epaAQI(p); let trend=lastData[5]>p?"Rising":"Falling";
+document.getElementById("aqi").innerHTML=`
+<h2 class="city-name">${city}</h2>
+<div class="aqi-bar" style="width:${Math.min(aqi.value,500)/5}%;background:${aqi.color}"></div>
+<p class="aqi-value">${aqi.value}</p>
+<p class="risk-level">${aqi.level}</p>
+<p>PM2.5: ${p}</p>
+<p>PM10: ${d.hourly.pm10[0]}</p>
+<p>CO: ${d.hourly.carbon_monoxide[0]}</p>
+<p>NO2: ${d.hourly.nitrogen_dioxide[0]}</p>
+<p>SO2: ${d.hourly.sulphur_dioxide[0]}</p>
+<p>O3: ${d.hourly.ozone[0]}</p>
+<p>Trend: ${trend}</p>
+<p>Mask & AI Advice: ${smartTip(aqi.value)}</p>
+`;
+drawChart(); notify(aqi.value); saveOffline(); drawHeatMap(lat,lon,aqi.value);
+});
+}
+
+/* DRAW 24-HOUR TEMPERATURE CHART */
+function drawChart(){let c=document.getElementById("chart"); let ctx=c.getContext("2d"); ctx.clearRect(0,0,400,150);
+if(!lastData || lastData.length===0) return;
+let max=Math.max(...lastData); let min=Math.min(...lastData);
+lastData.forEach((v,i)=>{let x=i*15; let y=150-(v/max)*140; ctx.fillStyle="#00ff9d"; ctx.fillRect(x,y,12,150-y);});
+ctx.fillStyle="red"; ctx.fillText("Max:"+max+"°C",10,15);
+ctx.fillStyle="blue"; ctx.fillText("Min:"+min+"°C",10,30);
+}
+
+/* NOTIFICATIONS */
+function notify(v){if(v>150){if(Notification.permission==="granted"){new Notification("⚠ Dangerous AQI",{body:"Stay indoors or wear N95"});}else{alert("⚠ Dangerous AQI! Stay indoors or wear N95");}}}
+
+/* OFFLINE CACHE */
+function saveOffline(){localStorage.setItem("aqi24",JSON.stringify(lastData));}
+
+/* HEATMAP */
+function drawHeatMap(lat,lon,value){if(!map)return; L.circle([lat,lon],{radius:5000,fillColor:aqiColor(value),color:aqiColor(value),fillOpacity:0.4}).addTo(map);}
+
+/* SMART AI */
+function mask(v){if(v<80)return"Not required"; if(v<150)return"Cloth mask"; return"N95 recommended";}
+function smartTip(v){if(v<50)return"Perfect outdoor day"; if(v<100)return"Sensitive people limit exposure"; if(v<150)return"Avoid exercise outside"; if(v<200)return"Stay indoors"; return"Emergency condition!";}
+function risk(v){if(v<50)return"Safe"; if(v<100)return"Low"; if(v<150)return"Medium"; if(v<200)return"High"; return"Extreme";}
+function epaAQI(cp){const t=[{cL:0,cH:12,iL:0,iH:50,l:"Good",c:"#00e400"},{cL:12.1,cH:35.4,iL:51,iH:100,l:"Moderate",c:"#ffff00"},{cL:35.5,cH:55.4,iL:101,iH:150,l:"Sensitive",c:"#ff7e00"},{cL:55.5,cH:150.4,iL:151,iH:200,l:"Unhealthy",c:"#ff0000"},{cL:150.5,cH:250.4,iL:201,iH:300,l:"Very Unhealthy",c:"#8f3f97"},{cL:250.5,cH:500.4,iL:301,iH:500,l:"Hazardous",c:"#7e0023"}]; for(let x of t){if(cp>=x.cL&&cp<=x.cH){let a=((x.iH-x.iL)/(x.cH-x.cL))*(cp-x.cL)+x.iL; return {value:Math.round(a),level:x.l,color:x.c};}}}
+function aqiColor(v){return epaAQI(v).color;}
+function weatherText(code){
+  if(code===0) return "Clear";
+  if(code===1) return "Mainly Clear";
+  if(code===2) return "Partly Cloudy";
+  if(code===3) return "Overcast";
+  if(code>=45 && code<=48) return "Fog";
+  if(code>=51 && code<=57) return "Drizzle";
+  if(code>=61 && code<=67) return "Rain";
+  if(code>=71 && code<=77) return "Snow";
+  if(code>=80 && code<=82) return "Rain Showers";
+  if(code>=95) return "Thunderstorm";
+  return "Unknown";
+}
+if('Notification' in window){Notification.requestPermission();}
 </script>
 </body>
 </html>
