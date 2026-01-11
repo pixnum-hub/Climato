@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Climato - Weather & AQI PWA</title>
+<title>Climato - Weather & AQI</title>
 <link rel="manifest" href="manifest.json">
 <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
 <style>
@@ -48,9 +48,7 @@ body{
   z-index:10;
   transition:0.3s;
 }
-#darkModeToggle:hover{
-  background: rgba(255,255,255,0.15);
-}
+#darkModeToggle:hover{background: rgba(255,255,255,0.15);}
 .card{
   background: rgba(255,255,255,0.05);
   backdrop-filter: blur(15px);
@@ -109,7 +107,7 @@ footer{margin-top:20px;font-size:14px;color: rgba(255,255,255,0.6);text-align:ce
     <h3>7-Day Forecast for Temperature</h3>
     <ul id="forecast-list"></ul>
     <h3>24-Hour Temperature (Max/Min)</h3>
-    <canvas id="chart" width="400" height="150"></canvas>
+    <canvas id="tempChart" width="400" height="150"></canvas>
   </div>
 
   <div id="aqi" class="card">
@@ -133,9 +131,9 @@ footer{margin-top:20px;font-size:14px;color: rgba(255,255,255,0.6);text-align:ce
 
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
-// JS remains same, only dark mode toggle color and button color updated
-let lastData=[], map=null, markers=[], darkMode=false;
+let tempData=[], aqiData=[], map=null, darkMode=false;
 
+// Dark Mode toggle
 function toggleDarkMode(){
   darkMode=!darkMode;
   document.body.style.background=darkMode?'#000':'#fff';
@@ -143,22 +141,108 @@ function toggleDarkMode(){
   document.getElementById('darkModeToggle').innerHTML=darkMode?'☀':'🌙';
 }
 
-function initMap(){if(map)return; map=L.map('map').setView([20,78],4); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);}
-function updateMapMarker(lat,lon,city){initMap(); markers.forEach(m=>map.removeLayer(m)); markers=[]; let marker=L.circleMarker([lat,lon],{color:'#1E3A8A',radius:12}).addTo(map).bindPopup(city); markers.push(marker); map.setView([lat,lon],8);}
-function searchCity(){let city=document.getElementById("city").value; fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${city}`).then(r=>r.json()).then(d=>{let c=d.results[0]; loadData(c.latitude,c.longitude,c.name,c.country);});}
+// Map
+function initMap(){if(!map) map=L.map('map').setView([20,78],4); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);}
+function updateMapMarker(lat,lon,city){initMap(); L.marker([lat,lon]).addTo(map).bindPopup(city).openPopup(); map.setView([lat,lon],8);}
+
+// City search
+function searchCity(){let city=document.getElementById("city").value; fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${city}`).then(r=>r.json()).then(d=>{if(d.results && d.results.length>0){let c=d.results[0]; loadData(c.latitude,c.longitude,c.name,c.country);}});}
 function getLocation(){navigator.geolocation.getCurrentPosition(p=>{loadData(p.coords.latitude,p.coords.longitude,"Your Location","");});}
-function loadData(lat,lon,city,country){getWeather(lat,lon,city,country); getAQI(lat,lon,city); updateMapMarker(lat,lon,city); setInterval(()=>getAQI(lat,lon,city),600000);}
 
-// Weather, AQI, Chart functions remain same, only button/marker colors now #1E3A8A
-</script>
-
-<script>
-// PWA service worker registration
-if('serviceWorker' in navigator){
-  navigator.serviceWorker.register('sw.js')
-  .then(reg=>console.log('Service Worker Registered', reg))
-  .catch(err=>console.log('SW registration failed:', err));
+// Load both weather & AQI
+function loadData(lat,lon,city){
+  loadWeather(lat,lon,city);
+  loadAQI(lat,lon,city);
+  updateMapMarker(lat,lon,city);
 }
+
+// Weather
+async function loadWeather(lat,lon,city){
+  try{
+    let res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,relativehumidity_2m,pressure_msl,weathercode&daily=temperature_2m_max,temperature_2m_min,sunrise,sunset&current_weather=true&timezone=auto`);
+    let d = await res.json();
+    tempData = d.hourly.temperature_2m.slice(0,24);
+    updateWeatherUI(d,city);
+    drawTempChart();
+  }catch(e){console.error("Weather error",e);}
+}
+
+function updateWeatherUI(d,city){
+  let weatherCode = d.hourly.weathercode[0];
+  let desc = weatherText(weatherCode);
+  document.getElementById("weather").querySelector(".city-name").textContent = city;
+  document.getElementById("weather").querySelector(".temp").textContent = d.current_weather.temperature + " °C";
+  document.getElementById("weather").querySelectorAll("p")[1].textContent = "Humidity: " + d.hourly.relativehumidity_2m[0] + "%";
+  document.getElementById("weather").querySelectorAll("p")[2].textContent = "Wind: " + d.current_weather.windspeed + " km/h";
+  document.getElementById("weather").querySelectorAll("p")[3].textContent = "Pressure: " + d.hourly.pressure_msl[0] + " hPa";
+  document.getElementById("weather").querySelectorAll("p")[4].textContent = "Weather: " + desc;
+
+  // Forecast list
+  let list = document.getElementById("forecast-list");
+  list.innerHTML = "";
+  for(let i=0;i<d.daily.temperature_2m_max.length;i++){
+    let li = document.createElement("li");
+    li.textContent = `Day ${i+1}: Max ${d.daily.temperature_2m_max[i]}°C / Min ${d.daily.temperature_2m_min[i]}°C`;
+    list.appendChild(li);
+  }
+}
+
+// Draw 24-hour chart
+function drawTempChart(){
+  let c = document.getElementById("tempChart");
+  if(!c || tempData.length===0) return;
+  let ctx = c.getContext("2d");
+  ctx.clearRect(0,0,c.width,c.height);
+  let max = Math.max(...tempData);
+  tempData.forEach((v,i)=>{
+    let x = i*15;
+    let y = c.height - (v/max)*140;
+    ctx.fillStyle = v>=30?'#ff4500':v>=20?'#ffd700':'#00bfff';
+    ctx.fillRect(x,y,12,c.height-y);
+  });
+}
+
+// AQI
+async function loadAQI(lat,lon,city){
+  try{
+    let res = await fetch(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}`);
+    let d = await res.json();
+    aqiData = d.hourly.pm2_5.slice(0,24);
+    updateAQIUI(d,city);
+  }catch(e){console.error("AQI error",e);}
+}
+
+function updateAQIUI(d,city){
+  let p = aqiData[0];
+  let aqi = epaAQI(p);
+  let trend = aqiData[5]>p?"Rising":"Falling";
+  let card = document.getElementById("aqi");
+  card.querySelector(".city-name").textContent = city;
+  card.querySelector(".aqi-bar").style.width = Math.min(aqi.value,500)/5 + "%";
+  card.querySelector(".aqi-bar").style.background = aqi.color;
+  card.querySelector(".aqi-value").textContent = aqi.value;
+  card.querySelector(".risk-level").textContent = aqi.level;
+  card.querySelectorAll("p")[3].textContent = "PM2.5: "+p;
+  card.querySelectorAll("p")[4].textContent = "PM10: "+d.hourly.pm10[0];
+  card.querySelectorAll("p")[5].textContent = "CO: "+d.hourly.carbon_monoxide[0];
+  card.querySelectorAll("p")[6].textContent = "NO2: "+d.hourly.nitrogen_dioxide[0];
+  card.querySelectorAll("p")[7].textContent = "SO2: "+d.hourly.sulphur_dioxide[0];
+  card.querySelectorAll("p")[8].textContent = "O3: "+d.hourly.ozone[0];
+  card.querySelectorAll("p")[9].textContent = "Trend: "+trend;
+  card.querySelectorAll("p")[10].textContent = "Mask & AI Advice: "+smartTip(aqi.value);
+}
+
+// Utility functions
+function epaAQI(cp){
+  const t=[{cL:0,cH:12,iL:0,iH:50,l:"Good",c:"#00e400"},{cL:12.1,cH:35.4,iL:51,iH:100,l:"Moderate",c:"#ffff00"},{cL:35.5,cH:55.4,iL:101,iH:150,l:"Sensitive",c:"#ff7e00"},{cL:55.5,cH:150.4,iL:151,iH:200,l:"Unhealthy",c:"#ff0000"},{cL:150.5,cH:250.4,iL:201,iH:300,l:"Very Unhealthy",c:"#8f3f97"},{cL:250.5,cH:500.4,iL:301,iH:500,l:"Hazardous",c:"#7e0023"}];
+  for(let x of t){if(cp>=x.cL && cp<=x.cH){let a=((x.iH-x.iL)/(x.cH-x.cL))*(cp-x.cL)+x.iL; return {value:Math.round(a),level:x.l,color:x.c};}}
+}
+function smartTip(v){if(v<50)return"Perfect outdoor day"; if(v<100)return"Sensitive people limit exposure"; if(v<150)return"Avoid exercise outside"; if(v<200)return"Stay indoors"; return"Emergency condition!";}
+function weatherText(code){if(code===0) return "Clear"; if(code===1) return "Mainly Clear"; if(code===2) return "Partly Cloudy"; if(code===3) return "Overcast"; if(code>=45 && code<=48) return "Fog"; if(code>=51 && code<=57) return "Drizzle"; if(code>=61 && code<=67) return "Rain"; if(code>=71 && code<=77) return "Snow"; if(code>=80 && code<=82) return "Rain Showers"; if(code>=95) return "Thunderstorm"; return "Unknown";}
+
+// PWA SW
+if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js').then(()=>console.log("SW registered")).catch(err=>console.log(err));}
+
 </script>
 </body>
 </html>
